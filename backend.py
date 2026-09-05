@@ -15,7 +15,7 @@ from datetime import datetime
 from pydantic import BaseModel
 
 import fitz
-from PIL import Image
+from PIL import Image, ImageOps, ImageEnhance, ImageFilter
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.shared import Pt, Cm
@@ -65,7 +65,7 @@ def tesseract_available():
 @app.get('/api/health')
 def health():
     exe = configure_tesseract()
-    return {'ok': True, 'version': '0.7', 'mode':'web-production', 'ocr': bool(exe and pytesseract), 'tesseract_path': exe}
+    return {'ok': True, 'version': '0.8', 'mode':'web-production-fast', 'ocr': bool(exe and pytesseract), 'tesseract_path': exe}
 
 @app.get('/api/ocr-status')
 def ocr_status():
@@ -137,7 +137,7 @@ def pdf_text(data: bytes):
 def _ocr_variants(img: Image.Image):
     """Executa OCR em variantes que funcionam melhor para documentos brasileiros."""
     if not tesseract_available(): return []
-    from PIL import ImageOps, ImageEnhance, ImageFilter
+    from PIL import Image, ImageOps, ImageEnhance, ImageFilterOps, ImageEnhance, ImageFilter
     base=img.convert('RGB')
     gray=ImageOps.grayscale(base)
     gray=ImageOps.autocontrast(gray)
@@ -181,7 +181,7 @@ def ocr_doc(doc: fitz.Document, max_pages=40, document_hint=''):
             for c in crops: candidates.extend(_ocr_variants(c))
         else:
             # Matrículas longas: uma passada PSM 6 é mais rápida e preserva a sequência dos atos.
-            from PIL import ImageOps, ImageEnhance, ImageFilter
+            from PIL import Image, ImageOps, ImageEnhance, ImageFilterOps, ImageEnhance, ImageFilter
             gray=ImageOps.autocontrast(ImageOps.grayscale(img))
             gray=ImageEnhance.Contrast(gray).enhance(1.35).filter(ImageFilter.SHARPEN)
             try: candidates.append(pytesseract.image_to_string(gray, lang='por', config='--oem 3 --psm 6'))
@@ -194,6 +194,51 @@ def ocr_doc(doc: fitz.Document, max_pages=40, document_hint=''):
             key=re.sub(r'\s+',' ',txt).strip()
             if key and key not in seen:
                 seen.append(key); out.append(f'\n--- OCR PAGINA {i+1} ---\n{txt}')
+    return '\n'.join(out)
+
+def ocr_doc_fast(doc: fitz.Document, document_hint=''):
+    """OCR rápido: somente páginas essenciais e somente quando o texto nativo não basta."""
+    if not tesseract_available() or len(doc)==0:
+        return ''
+    personal=document_hint in {'CNH','RG','CIN','CPF','Certidão de casamento','Certidão de nascimento','Comprovante de endereço'}
+    if personal:
+        page_indexes=[0]
+    elif document_hint in {'Matrícula','BCI/IPTU'}:
+        # Em registros escaneados, prioriza início e fim. A análise registral completa é manual.
+        page_indexes=list(dict.fromkeys([0, 1 if len(doc)>1 else 0, max(0,len(doc)-2), len(doc)-1]))
+    else:
+        page_indexes=[0]
+    out=[]
+    for i in page_indexes:
+        try:
+            page=doc[i]
+            img=_render_page(page, 2.4 if personal else 1.8)
+            candidates=[]
+            if personal:
+                w,h=img.size
+                # Primeiro recorte útil; evita OCR desnecessário da página inteira/QR.
+                crops=[img.crop((0,0,int(w*.62),int(h*.70))), img]
+                for c in crops:
+                    gray=ImageOps.autocontrast(ImageOps.grayscale(c))
+                    gray=ImageEnhance.Contrast(gray).enhance(1.35).filter(ImageFilter.SHARPEN)
+                    try: txt=pytesseract.image_to_string(gray, lang='por', config='--oem 3 --psm 6')
+                    except Exception:
+                        try: txt=pytesseract.image_to_string(gray, config='--oem 3 --psm 6')
+                        except Exception: txt=''
+                    if txt.strip(): candidates.append(txt)
+                    if candidates: break
+            else:
+                gray=ImageOps.autocontrast(ImageOps.grayscale(img))
+                gray=ImageEnhance.Contrast(gray).enhance(1.25).filter(ImageFilter.SHARPEN)
+                try: txt=pytesseract.image_to_string(gray, lang='por', config='--oem 3 --psm 6')
+                except Exception:
+                    try: txt=pytesseract.image_to_string(gray, config='--oem 3 --psm 6')
+                    except Exception: txt=''
+                if txt.strip(): candidates.append(txt)
+            for txt in candidates:
+                out.append(f'\n--- OCR RAPIDO PAGINA {i+1} ---\n{txt}')
+        except Exception:
+            continue
     return '\n'.join(out)
 
 def image_ocr(data: bytes):
@@ -385,41 +430,58 @@ def extract_fields(typ: str, text: str, source: str):
 @app.post('/api/extract')
 async def extract(file: UploadFile = File(...), declared_type: str = Form('auto'), role: str = Form('Outro')):
     data=await file.read(); name=file.filename or 'documento'
-    suffix=Path(name).suffix.lower(); text=''; pages=1; method='texto'; ocr_used=False
+    suffix=Path(name).suffix.lower(); text=''; pages=1; method='texto PDF'; ocr_used=False
+    doc=None
     try:
         if suffix=='.pdf':
             text,pages,doc=pdf_text(data)
-            meaningful=len(re.sub(r'\s+','',text))
-            if meaningful < 180 and tesseract_available():
-                ocr=ocr_doc(doc)
-                if len(ocr)>len(text): text=ocr; method='OCR'; ocr_used=True
         elif suffix in ('.png','.jpg','.jpeg','.webp'):
-            text=image_ocr(data); method='OCR' if text else 'imagem'; ocr_used=bool(text)
-        else: return JSONResponse({'error':'Formato não suportado'}, status_code=400)
+            text=image_ocr(data); method='OCR rápido' if text else 'imagem'; ocr_used=bool(text)
+        else:
+            return JSONResponse({'error':'Formato não suportado'}, status_code=400)
     except Exception as e:
         return JSONResponse({'error':f'Falha ao processar: {e}'}, status_code=400)
+
     typ=classify(name,text,declared_type)
     fields,pending=extract_fields(typ,text,method)
-    expected_types={'CNH','RG','CIN','CPF','Certidão de casamento','Certidão de nascimento','Comprovante de endereço','Matrícula','BCI/IPTU'}
     useful_keys={f.get('key') for f in fields}
-    personal=typ in {'CNH','RG','CIN','CPF','Certidão de casamento','Certidão de nascimento','Comprovante de endereço'}
-    weak=(typ in expected_types and len(fields)<3) or (typ in {'CNH','RG','CIN','CPF'} and not ({'nome','cpf'} <= useful_keys))
-    # Em CNH/RG/CIN, o texto PDF geralmente contém somente certificado/QR; OCR visual é obrigatório.
-    # Em matrícula, OCR é acionado quando o PDF não oferece texto suficiente, incluindo todas as páginas úteis.
-    if suffix=='.pdf' and tesseract_available() and (personal or weak):
+    critical_by_type={
+        'CNH': {'nome','cpf'}, 'RG': {'nome'}, 'CIN': {'nome','cpf'}, 'CPF': {'nome','cpf'},
+        'Certidão de casamento': {'regime'}, 'Comprovante de endereço': {'endereco'},
+        'Matrícula': {'matricula','cartorio'}, 'BCI/IPTU': {'inscricao'}
+    }
+    critical=critical_by_type.get(typ,set())
+    missing_critical=bool(critical - useful_keys)
+    native_chars=len(re.sub(r'\s+','',text))
+
+    # LEITURA RÁPIDA: OCR só entra quando realmente necessário.
+    # Matrículas digitais usam todo o texto nativo sem OCR. Matrículas escaneadas recebem OCR apenas
+    # em páginas essenciais (início/fim), deixando a análise registral completa para o corretor.
+    need_ocr = suffix=='.pdf' and tesseract_available() and (missing_critical or native_chars < 220)
+    if need_ocr and doc is not None:
         try:
-            if 'doc' not in locals(): _,_,doc=pdf_text(data)
-            ocr=ocr_doc(doc, max_pages=40, document_hint=typ)
+            ocr=ocr_doc_fast(doc, document_hint=typ)
             if ocr.strip():
                 merged=(text+'\n'+ocr).strip()
-                new_fields,new_pending=extract_fields(typ,merged,'OCR + texto PDF' if text.strip() else 'OCR')
-                if personal or len(new_fields)>=len(fields):
-                    text=merged; fields=new_fields; pending=new_pending; method='OCR + texto PDF' if text.strip() else 'OCR'; ocr_used=True
+                new_fields,new_pending=extract_fields(typ,merged,'OCR rápido + texto PDF' if text.strip() else 'OCR rápido')
+                if len(new_fields)>=len(fields):
+                    text=merged; fields=new_fields; pending=new_pending
+                    method='OCR rápido + texto PDF' if native_chars else 'OCR rápido'; ocr_used=True
         except Exception:
             pass
-    if not text.strip(): pending.insert(0,'Não foi possível extrair texto. Instale/ative o Tesseract OCR para documentos escaneados.')
+
+    # A leitura rápida não tenta concluir histórico registral completo.
+    if typ=='Matrícula':
+        pending=[p for p in pending if 'Atos registrais encontrados' not in p and 'titular registral mais recente' not in p]
+        pending.append('Leitura rápida concluída. O corretor deve conferir manualmente o histórico registral, gravames e titularidade atual antes da assinatura.')
+    if not text.strip():
+        pending.insert(0,'Não foi possível extrair texto deste arquivo. Confira o OCR do servidor ou preencha manualmente.')
     confidence='Alta' if len(fields)>=4 else ('Média' if len(fields)>=2 else 'Baixa')
-    return {'filename':name,'document_type':typ,'role':role,'pages':pages,'method':method,'ocr_used':ocr_used,'confidence':confidence,'fields':fields,'pending':pending,'text_preview':text[:1500]}
+    return {
+        'filename':name,'document_type':typ,'role':role,'pages':pages,'method':method,'ocr_used':ocr_used,
+        'mode':'leitura_rapida','confidence':confidence,'fields':fields,'pending':list(dict.fromkeys(pending)),
+        'text_preview':text[:1200]
+    }
 
 class GenerateRequest(BaseModel):
     title: str='CONTRATO PARTICULAR DE PROMESSA DE COMPRA E VENDA DE IMÓVEL'

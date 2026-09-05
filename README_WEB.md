@@ -1,4 +1,4 @@
-# APM Contratos Web v0.7 — Render Production
+# APM Contratos Web v0.8 — Render Production
 
 Esta versão corrige o carregamento de CSS/JavaScript/assets no Render e executa OCR no servidor.
 
@@ -20,10 +20,10 @@ Substitua os arquivos da v0.5 pelos arquivos desta pasta e faça Commit na branc
 - DATABASE_URL: adicionar quando o PostgreSQL estiver configurado
 
 ## Teste após o deploy
-Abra /api/health. Deve retornar JSON com ok=true, version=0.7 e ocr=true.
+Abra /api/health. Deve retornar JSON com ok=true, version=0.8 e ocr=true.
 Depois abra a raiz do site e confirme que o layout está estilizado e o indicador mostra Online + OCR.
 
-## v0.7 - leitura documental ampliada
+## v0.8 - leitura documental ampliada
 - CNH/RG/CIN em PDF passam por OCR visual mesmo quando o PDF contém somente texto do QR/certificado.
 - CNHs digitais SENATRAN usam recortes da área do documento e leitura da zona MRZ como apoio.
 - Matrículas escaneadas podem ser lidas em todas as páginas, com extração de matrícula, CNM, cartório, descrição registral, endereço, unidade, condomínio, inscrição, áreas e atos registrais.

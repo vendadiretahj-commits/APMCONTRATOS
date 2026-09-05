@@ -83,7 +83,7 @@ const testExtractions={
     ['Cônjuge 1','JOSÉ RODRIGO ORESTES DE SOUSA','Certidão'],['Cônjuge 2','SORAYA LOPES NERY','Certidão'],['Regime de bens','Comunhão Parcial de Bens','Certidão'],['Data do registro','26/01/2015','Certidão'],['Matrícula','004143 01 55 2015 3 00093 084 0002311 10','Certidão']
   ],pending:[],preview:'pdf'},
   'wallet_RG-DIGITAL.pdf':{type:'CIN',confidence:'Alta',fields:[
-    ['Nome','SAMARA GABRIELLE DOS SANTOS VIEIRA CORREIA','CIN'],['CPF','020.799.262-90','CIN'],['Nascimento','04/07/2005','CIN'],['Nacionalidade','BRASILEIRA','CIN'],['Naturalidade','MANAUS/AM','CIN'],['Estado civil','Solteiro(a)','CIN']
+    ['Nome','SAMARA GABRIELLE DOS SANTOS VIEIRA CORREIA','CIN'],['CPF','020.899.262-90','CIN'],['Nascimento','04/07/2005','CIN'],['Nacionalidade','BRASILEIRA','CIN'],['Naturalidade','MANAUS/AM','CIN'],['Estado civil','Solteiro(a)','CIN']
   ],pending:['Profissão não localizada'],preview:'pdf'},
   'CPF.pdf':{type:'CPF',confidence:'Média',fields:[
     ['Nome','REJANE DOS SANTOS VIEIRA','CPF'],['CPF','666.817.582-15','CPF'],['Nascimento','24/08/1981','CPF']
