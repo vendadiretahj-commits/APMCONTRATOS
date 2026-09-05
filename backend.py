@@ -31,7 +31,7 @@ except Exception:
     pytesseract = None
 
 ROOT = Path(__file__).resolve().parent
-app = FastAPI(title='APM Contratos Web', version='0.6')
+app = FastAPI(title='APM Contratos Web', version='0.7')
 app.add_middleware(SessionMiddleware, secret_key=os.getenv('APP_SECRET','dev-change-me'), https_only=os.getenv('COOKIE_SECURE','false').lower()=='true', same_site='lax')
 
 
@@ -65,7 +65,7 @@ def tesseract_available():
 @app.get('/api/health')
 def health():
     exe = configure_tesseract()
-    return {'ok': True, 'version': '0.6', 'mode':'web-production', 'ocr': bool(exe and pytesseract), 'tesseract_path': exe}
+    return {'ok': True, 'version': '0.7', 'mode':'web-production', 'ocr': bool(exe and pytesseract), 'tesseract_path': exe}
 
 @app.get('/api/ocr-status')
 def ocr_status():
@@ -109,7 +109,7 @@ def normalize(s: str) -> str:
 
 def classify(name: str, text: str, declared: str) -> str:
     if declared and declared != 'auto': return declared
-    hay = (name + '\n' + text[:5000]).lower()
+    hay = re.sub(r'\s+',' ',(name + '\n' + text[:7000])).lower()
     checks = [
         ('Certidão de casamento', ['certidão de casamento','certidao de casamento']),
         ('Certidão de nascimento', ['certidão de nascimento','certidao de nascimento']),
@@ -118,7 +118,7 @@ def classify(name: str, text: str, declared: str) -> str:
         ('RG', ['carteira de identidade','registro geral']),
         ('CPF', ['cadastro de pessoas físicas','cadastro de pessoas fisicas']),
         ('BCI/IPTU', ['boletim de cadastro imobiliário','inscrição imobiliária','valor venal']),
-        ('Matrícula', ['registro de imóveis','registro de imoveis','matrícula','matricula','livro nº 2','livro n.º 2']),
+        ('Matrícula', ['registro de imóveis','registro de imoveis','matrícula','matricula','livro nº 2','livro n.º 2','certidão digital de inteiro teor','certidao de inteiro teor']),
         ('Comprovante de endereço', ['amazonas energia','manaus ambiental','unidade consumidora','conta de energia','conta de água']),
     ]
     for typ, words in checks:
@@ -134,30 +134,77 @@ def pdf_text(data: bytes):
     return '\n'.join(texts), len(doc), doc
 
 
-def ocr_doc(doc: fitz.Document, max_pages=12):
+def _ocr_variants(img: Image.Image):
+    """Executa OCR em variantes que funcionam melhor para documentos brasileiros."""
+    if not tesseract_available(): return []
+    from PIL import ImageOps, ImageEnhance, ImageFilter
+    base=img.convert('RGB')
+    gray=ImageOps.grayscale(base)
+    gray=ImageOps.autocontrast(gray)
+    gray=ImageEnhance.Contrast(gray).enhance(1.45)
+    gray=gray.filter(ImageFilter.SHARPEN)
+    variants=[gray]
+    results=[]
+    for v in variants:
+        for psm in (6, 11):
+            try:
+                txt=pytesseract.image_to_string(v, lang='por', config=f'--oem 3 --psm {psm}')
+            except Exception:
+                try: txt=pytesseract.image_to_string(v, config=f'--oem 3 --psm {psm}')
+                except Exception: txt=''
+            if txt.strip(): results.append(txt)
+    return results
+
+
+def _render_page(page, scale=3.2):
+    pix=page.get_pixmap(matrix=fitz.Matrix(scale,scale), alpha=False)
+    return Image.open(io.BytesIO(pix.tobytes('png'))).convert('RGB')
+
+
+def ocr_doc(doc: fitz.Document, max_pages=40, document_hint=''):
+    """OCR por página. Para documentos pessoais, recorta a área útil além da página inteira."""
     if not tesseract_available(): return ''
     out=[]
-    # Documentos pessoais costumam ocupar uma única página e se beneficiam de renderização maior.
-    scale = 3.3 if len(doc) <= 2 else 2.1
+    personal=document_hint in {'CNH','RG','CIN','CPF','Certidão de casamento','Certidão de nascimento','Comprovante de endereço'}
+    scale=3.0 if personal or len(doc)<=2 else 2.2
     for i in range(min(len(doc), max_pages)):
-        pix=doc[i].get_pixmap(matrix=fitz.Matrix(scale,scale), alpha=False)
-        img=Image.open(io.BytesIO(pix.tobytes('png'))).convert('RGB')
-        try:
-            txt=pytesseract.image_to_string(img, lang='por')
-            if not txt.strip(): txt=pytesseract.image_to_string(img)
-            out.append(txt)
-        except Exception:
-            try: out.append(pytesseract.image_to_string(img))
-            except Exception: out.append('')
+        img=_render_page(doc[i], scale)
+        candidates=[]
+        if personal:
+            candidates.extend(_ocr_variants(img))
+            w,h=img.size
+            # CNHs digitais SENATRAN trazem o documento à esquerda e o QR à direita.
+            crops=[
+                img.crop((0,0,int(w*.58),h)),
+                img.crop((0,0,int(w*.68),int(h*.62))),
+            ]
+            for c in crops: candidates.extend(_ocr_variants(c))
+        else:
+            # Matrículas longas: uma passada PSM 6 é mais rápida e preserva a sequência dos atos.
+            from PIL import ImageOps, ImageEnhance, ImageFilter
+            gray=ImageOps.autocontrast(ImageOps.grayscale(img))
+            gray=ImageEnhance.Contrast(gray).enhance(1.35).filter(ImageFilter.SHARPEN)
+            try: candidates.append(pytesseract.image_to_string(gray, lang='por', config='--oem 3 --psm 6'))
+            except Exception:
+                try: candidates.append(pytesseract.image_to_string(gray, config='--oem 3 --psm 6'))
+                except Exception: pass
+        # Mantém textos distintos para maximizar a chance dos regex estruturais.
+        seen=[]
+        for txt in candidates:
+            key=re.sub(r'\s+',' ',txt).strip()
+            if key and key not in seen:
+                seen.append(key); out.append(f'\n--- OCR PAGINA {i+1} ---\n{txt}')
     return '\n'.join(out)
-
 
 def image_ocr(data: bytes):
     if not tesseract_available(): return ''
     img=Image.open(io.BytesIO(data)).convert('RGB')
-    try: return pytesseract.image_to_string(img, lang='por')
-    except Exception: return pytesseract.image_to_string(img)
-
+    texts=_ocr_variants(img)
+    # Também testa rotação automática simples para fotos de RG/CNH.
+    for angle in (90,270):
+        try: texts.extend(_ocr_variants(img.rotate(angle, expand=True)))
+        except Exception: pass
+    return '\n'.join(texts)
 
 def first_match(patterns, text, flags=re.I|re.M):
     for pat in patterns:
@@ -171,72 +218,168 @@ def add(fields, key, label, value, source):
         fields.append({'key':key,'label':label,'value':value,'source':source})
 
 
+def _format_cpf(raw):
+    if not raw: return raw
+    d=re.sub(r'\D','',raw)
+    if len(d)==11: return f'{d[:3]}.{d[3:6]}.{d[6:9]}-{d[9:]}'
+    return normalize(raw)
+
+
+def _clean_person_name(v):
+    if not v: return v
+    v=normalize(v).strip(' -:;,.')
+    # remove rótulos frequentemente colados pelo OCR
+    v=re.sub(r'^(?:NOME|NAME|NOME E SOBRENOME)\s*[:\-]?\s*','',v,flags=re.I)
+    return v
+
+
+def _find_name_from_mrz(t):
+    # Ex.: DELBSON<<BARROSO<DAS<NEVES<JUNIOR
+    lines=re.findall(r'\n\s*([A-Z0-9<]{18,})\s*(?:\n|$)', t.upper())
+    for line in reversed(lines):
+        if '<' not in line: continue
+        cleaned=re.sub(r'^[A-Z0-9]{1,5}<','',line)
+        cleaned=cleaned.replace('0','O')
+        words=[w for w in cleaned.replace('<<','<').split('<') if len(w)>1]
+        if len(words)>=3:
+            return ' '.join(words)
+    return None
+
+
+def _find_person_field(label_patterns, t, maxlen=90):
+    pats=[]
+    for lbl in label_patterns:
+        pats += [
+            rf'{lbl}\s*[:\-]?\s*\n\s*([^\n]{{3,{maxlen}}})',
+            rf'{lbl}\s*[:\-]?\s+([^\n]{{3,{maxlen}}})',
+        ]
+    return first_match(pats,t)
+
+
+def _latest_registry_owner(t):
+    """Sugere o titular a partir dos atos mais recentes; nunca afirma conclusão jurídica."""
+    candidates=[]
+    # consolidação em favor de credor
+    for m in re.finditer(r'(?:CONSOLIDAD[AA]\s+(?:A\s+)?PROPRIEDADE|fica\s+CONSOLIDAD[AA]\s+(?:a\s+)?PROPRIEDADE)[\s\S]{0,650}?(?:em nome d[ao]|na pessoa d[ao]|em favor d[ao])\s+(?:credora fiduci[áa]ria\s+)?([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ0-9 .&\-/]{5,120}?)(?=,|\.|\n)', t, re.I):
+        candidates.append((m.start(), normalize(m.group(1))))
+    # venda para adquirente
+    for pat in [
+        r'VENDEU?\s+(?:o\s+)?im[óo]vel[\s\S]{0,220}?(?:em favor de|\s+a\s+)\s*([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][A-ZÁÀÂÃÉÊÍÓÔÕÚÇ .]{5,120}?)(?=,\s*(?:brasileir|pessoa|inscrit)|,|\n)',
+        r'(?:OUTORGADO|COMPRADOR|ADQUIRENTE)[^:\n]{0,30}[:\-]\s*([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][A-ZÁÀÂÃÉÊÍÓÔÕÚÇ .]{5,120}?)(?=,|\n)'
+    ]:
+        for m in re.finditer(pat,t,re.I): candidates.append((m.start(),normalize(m.group(1))))
+    if candidates:
+        candidates.sort(key=lambda x:x[0]); return candidates[-1][1]
+    return None
+
+
 def extract_fields(typ: str, text: str, source: str):
     t=text.replace('\r','\n')
     fields=[]; pending=[]
-    cpf = first_match([r'CPF(?:/MF)?\s*(?:n[ºo°.]?\s*)?[:\-]?\s*(\d{3}[.\s]?\d{3}[.\s]?\d{3}[-\s]?\d{2})', r'\b(\d{3}\.\d{3}\.\d{3}-\d{2})\b'], t)
-    rg = first_match([r'(?:RG|REGISTRO GERAL|DOC(?:UMENTO)? DE IDENTIDADE)\s*(?:N[ºO°.]?\s*)?[:\-]?\s*([0-9.\-]+\s*(?:SSP|SESP|PC|IICC|SSDS)?/?[A-Z]{0,2})'],t)
-    nasc=first_match([r'(?:DATA DE NASCIMENTO|NASCIMENTO)\s*[:\-]?\s*(\d{2}/\d{2}/\d{4})', r'\b(\d{2}/\d{2}/\d{4})\b'],t)
+    cpf = first_match([
+        r'CPF(?:/MF)?\s*(?:N[ºO°.]?\s*)?[:\-]?\s*([0-9 .\-]{11,18})',
+        r'4[dD]?\s*CPF\s*[:\-]?\s*([0-9 .\-]{11,18})',
+        r'\b(\d{3}\.\d{3}\.\d{3}-\d{2})\b',
+        r'\b(\d{11})\b'
+    ], t)
+    cpf=_format_cpf(cpf)
+    rg = first_match([r'(?:RG|REGISTRO GERAL|DOC(?:UMENTO)? DE IDENTIDADE|4c DOC IDENTIDADE)[^\n:]{0,35}[:\-]?\s*([0-9.\-]+\s*(?:SSP|SESP|PC|IICC|SSDS)?\s*/?\s*[A-Z]{0,2})'],t)
+    nasc=first_match([r'(?:DATA (?:E LOCAL )?DE NASCIMENTO|NASCIMENTO)[^\n]{0,20}?[:\-]?\s*(\d{2}/\d{2}/\d{4})',r'\b(\d{2}/\d{2}/\d{4})\b'],t)
+
     if typ in ('CNH','RG','CIN','CPF'):
-        name=first_match([r'(?:NOME(?: E SOBRENOME)?|NOME / NAME)\s*[:\-]?\s*\n?\s*([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][A-ZÁÀÂÃÉÊÍÓÔÕÚÇ ]{5,})',r'\n([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]{2,}(?: [A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]{2,}){2,})\n'],t)
-        add(fields,'nome','Nome',name,source); add(fields,'cpf','CPF',cpf,source); add(fields,'rg','RG',rg,source); add(fields,'nascimento','Nascimento',nasc,source)
-        cnh=first_match([r'(?:N[ºO°.]?\s*REGISTRO|REGISTRO)\s*[:\-]?\s*(\d{9,12})'],t)
+        name=_find_person_field([r'(?:2\s*E\s*1\s*)?NOME E SOBRENOME',r'NOME / NAME',r'\bNOME\b'],t)
+        if name:
+            # evita engolir o campo seguinte
+            name=re.split(r'\s{2,}|\b(?:DATA|CPF|NASCIMENTO|REGISTRO|FILIA[CÇ][AÃ]O)\b',name,1,flags=re.I)[0]
+        bad_name = (not name) or bool(re.search(r'\d|HABILITA|NASCIMENTO|EMISS|VALIDADE|REGISTRO|NACIONALIDADE|SECRETARIA|REP[ÚU]BLICA', name or '', re.I))
+        if bad_name:
+            mrz_name=_find_name_from_mrz(t)
+            if mrz_name: name=mrz_name
+        name=_clean_person_name(name)
+        add(fields,'nome','Nome',name,source); add(fields,'cpf','CPF',cpf,source); add(fields,'rg','RG/Documento',rg,source); add(fields,'nascimento','Nascimento',nasc,source)
+        cnh=first_match([
+            r'(?:5\s*)?N[ºO°.]?\s*REGISTRO\s*[:\-]?\s*([0-9]{9,12})',
+            r'REGISTRO\s*[:\-]?\s*([0-9]{9,12})',
+            r'CPF[^\n]{0,40}?\d{3}[. ]?\d{3}[. ]?\d{3}[- ]?\d{2}[^\n]{0,40}?\b([0-9]{11})\b'
+        ],t)
         if typ=='CNH': add(fields,'cnh','Registro CNH',cnh,source)
-        nat=first_match([r'NACIONALIDADE\s*[:\-]?\s*([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]+)'],t)
+        nat=first_match([r'\b(BRASILEIRO\(A\)|BRASILEIRO|BRASILEIRA)\b',r'NACIONALIDADE\s*[:\-]?\s*\n?\s*([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]{5,})'],t)
         add(fields,'nacionalidade','Nacionalidade',nat,source)
+        localnasc=first_match([r'\d{2}/\d{2}/\d{4}\s*[,;-]\s*([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ .-]+[,/-]\s*[A-Z]{2})',r'(?:DATA, LOCAL E UF DE NASCIMENTO|LOCAL DE NASCIMENTO)[^\n]*\n?\s*(?:\d{2}/\d{2}/\d{4}\s*)?([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ .-]+[,/-]\s*[A-Z]{2})'],t)
+        add(fields,'naturalidade','Naturalidade/Local de nascimento',localnasc,source)
+        filiacao=_find_person_field([r'FILIA[CÇ][AÃ]O'],t,maxlen=180)
+        add(fields,'filiacao','Filiação',filiacao,source)
         if not cpf: pending.append('CPF não localizado com segurança.')
         if not name: pending.append('Nome não localizado com segurança.')
         pending += ['Estado civil deve ser confirmado em certidão ou informado manualmente.','Profissão deve ser confirmada em documento próprio ou informada manualmente.']
+
     elif typ=='Certidão de casamento':
-        regime=first_match([r'REGIME DE BENS[^\n]*\n\s*([^\n]{4,80})',r'(COMUNH[AÃ]O PARCIAL DE BENS|COMUNH[AÃ]O UNIVERSAL DE BENS|SEPARA[CÇ][AÃ]O[^\n]{0,40})'],t)
-        names=re.findall(r'\b([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]{2,}(?:\s+[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]{2,}){2,})\b',t)
-        # remove common headings
-        names=[n for n in names if not any(h in n for h in ['REPÚBLICA FEDERATIVA','REGISTRO CIVIL','CERTIDÃO DE CASAMENTO','COMUNHÃO PARCIAL'])]
+        regime=first_match([r'REGIME DE BENS[^\n]*\n\s*([^\n]{4,80})',r'(COMUNH[AÃ]O PARCIAL DE BENS|COMUNH[AÃ]O UNIVERSAL DE BENS|SEPARA[CÇ][AÃ]O[^\n]{0,50})'],t)
+        # primeiros nomes após o cabeçalho "Nomes" são mais confiáveis que qualquer caixa alta da página
+        block=first_match([r'(?:NOMES?|C[ÔO]NJUGES?)\s*[:\-]?\s*\n?([\s\S]{0,300}?)(?=MATR[ÍI]CULA|NOMES COMPLETOS|DATA DO REGISTRO|REGIME)'],t)
+        names=[]
+        if block:
+            for n in re.findall(r'([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]{2,}(?:\s+[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]{2,}){2,})',block):
+                if n not in names: names.append(n)
+        if not names:
+            names=re.findall(r'\b([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]{2,}(?:\s+[A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]{2,}){2,})\b',t)
+            names=[n for n in names if not any(h in n for h in ['REPÚBLICA FEDERATIVA','REGISTRO CIVIL','CERTIDÃO DE CASAMENTO','COMUNHÃO PARCIAL'])]
         if names: add(fields,'conjuge1','Cônjuge 1',names[0],source)
         if len(names)>1: add(fields,'conjuge2','Cônjuge 2',names[1],source)
         add(fields,'regime','Regime de bens',regime,source); add(fields,'estado_civil','Estado civil','Casado(a)',source)
         data=first_match([r'(?:DATA DO REGISTRO|DATA DA CELEBRA[CÇ][AÃ]O)[^\n]*\n?\s*([^\n]{5,60})'],t)
         add(fields,'data','Data do casamento/registro',data,source)
         if not regime: pending.append('Regime de bens não localizado com segurança.')
+
     elif typ=='Certidão de nascimento':
-        name=first_match([r'NOME\s*[:\-]?\s*\n?\s*([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][A-ZÁÀÂÃÉÊÍÓÔÕÚÇ ]{5,})'],t)
-        add(fields,'nome','Nome',name,source); add(fields,'nascimento','Nascimento',nasc,source)
-        fil=first_match([r'FILIA[CÇ][AÃ]O\s*[:\-]?\s*\n?\s*([^\n]{8,160})'],t)
-        add(fields,'filiacao','Filiação',fil,source)
+        name=_find_person_field([r'\bNOME\b'],t); add(fields,'nome','Nome',_clean_person_name(name),source); add(fields,'nascimento','Nascimento',nasc,source)
+        fil=_find_person_field([r'FILIA[CÇ][AÃ]O'],t,maxlen=180); add(fields,'filiacao','Filiação',fil,source)
+
     elif typ=='Comprovante de endereço':
         cep=first_match([r'CEP\s*[:\-]?\s*(\d{2}\.?\d{3}-?\d{3})',r'\b(\d{5}-\d{3})\b'],t)
-        endereco=first_match([r'\n((?:AV|AVENIDA|RUA|TRAVESSA|ALAMEDA|ESTRADA)\.?[^\n]{5,100})'],t)
+        endereco=first_match([r'\n((?:AV|AVENIDA|RUA|TRAVESSA|ALAMEDA|ESTRADA)\.?[^\n]{5,120})'],t)
         titular=first_match([r'\n([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]{2,}(?: [A-ZÁÀÂÃÉÊÍÓÔÕÚÇ]{2,}){2,})\n'],t)
         add(fields,'titular','Titular',titular,source); add(fields,'endereco','Endereço',endereco,source); add(fields,'cep','CEP',cep,source)
         cidadeuf=first_match([r'\b([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ ]{3,})\s*[-/]\s*([A-Z]{2})\b'],t)
         if cidadeuf: add(fields,'cidade_uf','Cidade/UF',cidadeuf,source)
         if not endereco: pending.append('Endereço não localizado com segurança; confira a imagem do comprovante.')
+
     elif typ in ('Matrícula','BCI/IPTU'):
-        mat=first_match([r'MATR[ÍI]CULA\s*(?:N[ºO°.]?\s*)?[:\-]?\s*([0-9.\-]{3,})',r'Matrícula\s*\n\s*([0-9.\-]{3,})'],t)
+        mat=first_match([r'MATR[ÍI]CULA\s*N?[^\n]{0,40}\n[^0-9\n]{0,15}([0-9]{1,3}\.[0-9]{3,})',r'MATR[ÍI]CULA\s*(?:N\s*[ºO°.-]?\s*)?[:\-]?\s*([0-9.\-]{3,})',r'MATR[ÍI]CULA[^\n]{0,20}\n\s*([0-9.\-]{3,})'],t)
         add(fields,'matricula','Matrícula',mat,source)
-        cart=first_match([r'((?:\d+[º°]?\s*)?OF[IÍ]CIO DE REGISTRO DE IM[ÓO]VEIS[^\n]{0,100})'],t)
+        cart=first_match([r'((?:\d+[º°]?\s*)?OF[IÍ]CIO\s+DE\s+REGISTRO\s+DE\s+IM[ÓO]VEIS(?:\s+E\s+PROTESTO\s+DE\s+T[IÍ]TULOS)?)',r'(CART[ÓO]RIO DO [^\n]{3,100})'],t)
         add(fields,'cartorio','Cartório',cart,source)
         cnm=first_match([r'CNM\s*[:\-]?\s*([0-9.\-]{8,})'],t); add(fields,'cnm','CNM',cnm,source)
-        inscr=first_match([r'INSCRI[CÇ][AÃ]O IMOBILI[ÁA]RIA\s*[:\-]?\s*([0-9.\-]+)',r'IM[ÓO]VEL CADASTRADO[^\n]{0,80}?N[ºO°.]?\s*([0-9.\-]+)'],t)
+        inscr=first_match([r'INSCRI[CÇ][AÃ]O IMOBILI[ÁA]RIA\s*[:\-]?\s*([0-9.\-]+)',r'IM[ÓO]VEL CADASTRADO[^\n]{0,100}?N[ºO°.]?\s*([0-9.\-]+)',r'INSCRIT[OA] JUNTO [ÀA] PREFEITURA[^\n]{0,80}?N[ºO°.]?\s*([0-9.\-]+)'],t)
         add(fields,'inscricao','Inscrição imobiliária',inscr,source)
-        endereco=first_match([r'(?:IM[ÓO]VEL\s*[-–:]\s*)?([^\n]{0,50}(?:RUA|AVENIDA|AV\.)[^\n]{8,150})'],t)
-        add(fields,'descricao','Descrição/endereço identificado',endereco,source)
-        tipo = 'Apartamento' if re.search(r'\bAPARTAMENTO\b|\bAPTO\.?\b', t, re.I) else ('Casa' if re.search(r'\bCASA RESIDENCIAL\b|\bUMA CASA\b', t, re.I) else ('Terreno' if re.search(r'\bTERRENO\b', t, re.I) else None))
+        # descrição registral inicial completa (sem usar como endereço único quando houver averbação posterior)
+        desc=first_match([r'IM[ÓO]VEL\s*[-–:]\s*([\s\S]{20,1400}?)(?=PROPRIET[ÁA]RI|REGISTRO\(S\) ANTERIOR|R[/ .-]?\d|AV[/ .-]?\d)'],t)
+        add(fields,'descricao_registral','Descrição registral',desc[:900] if desc else None,source)
+        # procura o endereço mais recente citado em construção/averbação; depois fallback para primeira descrição
+        addr_matches=[]
+        for m in re.finditer(r'(?:situad[oa]\s+[àa]|im[óo]vel situado [àa]|localizad[oa]\s+[àa]|situar-se\s+[àaá]?\s*na?)\s*((?:RUA|AVENIDA|AV\.|RODOVIA)[^\n.;]{5,160})',t,re.I): addr_matches.append((m.start(),normalize(m.group(1))))
+        endereco=addr_matches[-1][1] if addr_matches else first_match([r'((?:RUA|AVENIDA|AV\.)\s+[A-ZÁÀÂÃÉÊÍÓÔÕÚÇa-z0-9 .º°ª\-/]{5,160})'],t)
+        add(fields,'endereco','Endereço identificado',endereco,source)
+        tipo='Apartamento' if re.search(r'\bAPARTAMENTO\b|\bAPTO\.?\b',t,re.I) else ('Casa' if re.search(r'\bCASA RESIDENCIAL\b|\bUMA CASA\b|\bRESID[ÊE]NCIA\b',t,re.I) else ('Terreno' if re.search(r'\bTERRENO\b',t,re.I) else None))
         add(fields,'tipo_imovel','Tipo do imóvel',tipo,source)
-        cond=first_match([r'(CONDOM[IÍ]NIO[^\n,;.]{3,100})'],t)
-        add(fields,'condominio','Condomínio',cond,source)
-        unidade=first_match([r'((?:APARTAMENTO|APTO\.?)\s*(?:N[ºO°.]?\s*)?[0-9A-Z.-]+[^\n]{0,50})'],t)
-        add(fields,'complemento','Unidade/Complemento',unidade,source)
-        cidadeuf=first_match([r'\b([A-ZÁÀÂÃÉÊÍÓÔÕÚÇ][A-ZÁÀÂÃÉÊÍÓÔÕÚÇ ]{2,})[/-]([A-Z]{2})\b'],t)
-        add(fields,'cidade_uf','Cidade/UF',cidadeuf,source)
-        owner=first_match([r'PROPRIET[ÁA]RI[OA]\(S\)?\s*[-–:]\s*([^\n]{4,150})',r'PROPRIET[ÁA]RIA\s*[:\-]\s*([^\n]{4,150})'],t)
-        add(fields,'proprietario','Proprietário/titular aparente',owner,source)
-        # Status cues, never state definitive legal conclusion
+        cond=first_match([r'(CONDOM[IÍ]NIO\s+[A-ZÁÀÂÃÉÊÍÓÔÕÚÇa-z0-9 ._-]{3,100})'],t); add(fields,'condominio','Condomínio',cond,source)
+        unidade=first_match([r'((?:APARTAMENTO|APTO\.?)\s*(?:N[ºO°.]?\s*)?[0-9A-Z.-]+[^\n,;]{0,60})'],t); add(fields,'complemento','Unidade/Complemento',unidade,source)
+        cidadeuf=first_match([r'\b([A-ZÁÀÂÃÉÊÍÓÔÕÚÇa-záàâãéêíóôõúç ]{2,50}[-/](?:AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO))\b'],t); add(fields,'cidade_uf','Cidade/UF',cidadeuf,source)
+        owner_initial=first_match([r'PROPRIET[ÁA]RI[OA]\(S\)?\s*[-–:]\s*([^\n]{4,180})',r'PROPRIET[ÁA]RIA\s*[:\-]\s*([^\n]{4,180})'],t)
+        add(fields,'proprietario_inicial','Proprietário citado na abertura/descrição',owner_initial,source)
+        owner_latest=_latest_registry_owner(t)
+        add(fields,'titular_atual_sugerido','Titular mais recente aparente',owner_latest,source)
+        # metragens são apenas listadas, nunca comparadas
+        area_priv=first_match([r'[ÁA]REA (?:REAL )?PRIVATIVA(?: DE DIVIS[AÃ]O N[AÃ]O PROPORCIONAL)?(?: DE)?\s*([0-9.,]+\s*m[²2])',r'[ÁA]REA PRIVATIVA\s*[:\-]?\s*([0-9.,]+\s*m[²2])'],t)
+        area_total=first_match([r'[ÁA]REA TOTAL(?: DE)?\s*([0-9.,]+\s*m[²2])'],t)
+        area_const_matches=[normalize(x) for x in re.findall(r'[ÁA]REA (?:RESIDENCIAL )?CONSTRU[IÍ]DA(?: DE)?\s*([0-9.,]+\s*m[²2])',t,re.I)]
+        add(fields,'area_privativa_registro','Área privativa (registro)',area_priv,source); add(fields,'area_total_registro','Área total (registro)',area_total,source)
+        if area_const_matches: add(fields,'area_construida_registro','Área construída mais recente (registro)',area_const_matches[-1],source)
         cues=[]
-        for label,pat in [('Alienação fiduciária',r'ALIENA[CÇ][AÃ]O FIDUCI[ÁA]RIA'),('Consolidação',r'CONSOLIDA[CÇ][AÃ]O DA PROPRIEDADE'),('Penhora',r'PENHORA'),('Indisponibilidade',r'INDISPONIBILIDADE'),('Cancelamento',r'CANCELAMENTO')]:
+        for label,pat in [('Alienação fiduciária',r'ALIENA[CÇ][AÃ]O FIDUCI[ÁA]RIA'),('Consolidação da propriedade',r'CONSOLIDA[CÇ][AÃ]O DA PROPRIEDADE'),('Penhora',r'PENHORA'),('Indisponibilidade',r'INDISPONIBILIDADE'),('Cancelamento',r'CANCELAMENTO'),('Leilões negativos',r'LEIL[ÕO]ES? NEGATIV')]:
             if re.search(pat,t,re.I): cues.append(label)
         if cues: add(fields,'atos','Atos relevantes encontrados',', '.join(cues),source); pending.append('Atos registrais encontrados: confirmar a situação atual antes de usar no contrato.')
-        if typ=='Matrícula': pending.append('Confirmar o titular registral mais recente; o sistema não usa automaticamente o primeiro proprietário citado.')
+        if typ=='Matrícula': pending.append('Confirmar o titular registral mais recente; a ferramenta apresenta apenas uma sugestão baseada na sequência dos atos.')
     return fields, list(dict.fromkeys(pending))
 
 @app.post('/api/extract')
@@ -257,21 +400,21 @@ async def extract(file: UploadFile = File(...), declared_type: str = Form('auto'
         return JSONResponse({'error':f'Falha ao processar: {e}'}, status_code=400)
     typ=classify(name,text,declared_type)
     fields,pending=extract_fields(typ,text,method)
-    # Alguns PDFs digitais trazem apenas o texto do QR/certificado, enquanto os dados pessoais
-    # continuam rasterizados na página. Se a primeira leitura não encontrar campos úteis, roda OCR.
     expected_types={'CNH','RG','CIN','CPF','Certidão de casamento','Certidão de nascimento','Comprovante de endereço','Matrícula','BCI/IPTU'}
     useful_keys={f.get('key') for f in fields}
-    weak = (typ in expected_types and len(fields) < 2) or (typ in {'CNH','RG','CIN','CPF'} and not ({'nome','cpf'} & useful_keys))
-    if suffix=='.pdf' and weak and tesseract_available():
+    personal=typ in {'CNH','RG','CIN','CPF','Certidão de casamento','Certidão de nascimento','Comprovante de endereço'}
+    weak=(typ in expected_types and len(fields)<3) or (typ in {'CNH','RG','CIN','CPF'} and not ({'nome','cpf'} <= useful_keys))
+    # Em CNH/RG/CIN, o texto PDF geralmente contém somente certificado/QR; OCR visual é obrigatório.
+    # Em matrícula, OCR é acionado quando o PDF não oferece texto suficiente, incluindo todas as páginas úteis.
+    if suffix=='.pdf' and tesseract_available() and (personal or weak):
         try:
-            if 'doc' not in locals():
-                _,_,doc=pdf_text(data)
-            ocr=ocr_doc(doc)
+            if 'doc' not in locals(): _,_,doc=pdf_text(data)
+            ocr=ocr_doc(doc, max_pages=40, document_hint=typ)
             if ocr.strip():
                 merged=(text+'\n'+ocr).strip()
-                new_fields,new_pending=extract_fields(typ,merged,'OCR')
-                if len(new_fields) >= len(fields):
-                    text=merged; fields=new_fields; pending=new_pending; method='OCR'; ocr_used=True
+                new_fields,new_pending=extract_fields(typ,merged,'OCR + texto PDF' if text.strip() else 'OCR')
+                if personal or len(new_fields)>=len(fields):
+                    text=merged; fields=new_fields; pending=new_pending; method='OCR + texto PDF' if text.strip() else 'OCR'; ocr_used=True
         except Exception:
             pass
     if not text.strip(): pending.insert(0,'Não foi possível extrair texto. Instale/ative o Tesseract OCR para documentos escaneados.')
