@@ -188,7 +188,7 @@ function loadNamedTest(name){
 // ===== integração com servidor local v0.4 =====
 async function checkBackend(){
   const p=$('#backendPill'); if(!p)return;
-  try{const r=await fetch('/api/health'); if(!r.ok)throw 0; const j=await r.json(); p.textContent=j.ocr?'● Servidor + OCR':'● Servidor ativo'; p.classList.add('online'); p.title=j.ocr?'OCR pronto':'OCR não encontrado — abra Configurações para instalar'; updateOcrCard();}
+  try{const r=await fetch('/api/health'); if(!r.ok)throw 0; const j=await r.json(); p.textContent=j.ocr?'● Online + OCR':'● Online'; p.classList.add('online'); p.title=j.ocr?'Servidor online e OCR pronto':'Servidor online; OCR indisponível no servidor'; updateOcrCard();}
   catch(e){p.textContent='● Modo navegador'; p.classList.remove('online'); p.title='Abra pelo servidor local para leitura real e geração DOCX/PDF';}
 }
 async function updateOcrCard(){

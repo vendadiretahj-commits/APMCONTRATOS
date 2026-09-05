@@ -1,32 +1,24 @@
-# APM Contratos Web v0.5
+# APM Contratos Web v0.6 — Render Production
 
-Esta versão foi preparada para hospedagem online. Corretores acessam pelo navegador em qualquer dispositivo; OCR, geração DOCX/PDF e banco rodam no servidor.
+Esta versão corrige o carregamento de CSS/JavaScript/assets no Render e executa OCR no servidor.
 
-## Recursos desta versão
-- Login com sessão HTTP-only.
-- Usuário administrador inicial criado por variáveis de ambiente.
-- Negociações salvas em banco central (SQLite em desenvolvimento ou PostgreSQL em produção).
-- Leitura de PDF/imagem com Tesseract instalado dentro do container Docker.
-- Geração DOCX/PDF no servidor.
-- Frontend responsivo reaproveitado do protótipo v0.4.
-- Dockerfile e configuração `render.yaml` para implantação.
+## Atualização no GitHub
+Substitua os arquivos da v0.5 pelos arquivos desta pasta e faça Commit na branch main. O Render deve iniciar um novo deploy automaticamente.
 
-## Teste local com Docker
-1. Instale Docker Desktop.
-2. Na pasta do projeto execute: `docker compose up --build`
-3. Abra `http://localhost:8000`
-4. Login padrão do compose: `admin@apm.local` / `123456`
+## Render
+- Runtime: Docker
+- Root Directory: vazio se estes arquivos estiverem na raiz do repositório
+- Health check: /api/health (opcional)
+- Não é necessário instalar Tesseract no computador dos corretores. O Docker instala Tesseract no servidor.
 
-## Publicação no Render
-1. Crie um repositório Git privado e envie esta pasta.
-2. No Render, escolha Blueprint e selecione o `render.yaml`.
-3. Defina `ADMIN_PASSWORD` no painel do Render.
-4. Após o deploy, acesse a URL HTTPS criada pelo Render.
+## Variáveis recomendadas
+- APP_SECRET: uma sequência longa e aleatória
+- ADMIN_EMAIL: seu e-mail administrativo
+- ADMIN_PASSWORD: senha inicial forte
+- ADMIN_NAME: nome do administrador
+- COOKIE_SECURE: true
+- DATABASE_URL: adicionar quando o PostgreSQL estiver configurado
 
-## Produção
-Antes de uso com documentos reais:
-- trocar senha administrativa;
-- configurar domínio próprio;
-- revisar política LGPD e retenção;
-- configurar armazenamento de arquivos em serviço privado persistente (S3/R2) na próxima versão;
-- ativar backups do PostgreSQL.
+## Teste após o deploy
+Abra /api/health. Deve retornar JSON com ok=true, version=0.6 e ocr=true.
+Depois abra a raiz do site e confirme que o layout está estilizado e o indicador mostra Online + OCR.

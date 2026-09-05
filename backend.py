@@ -31,7 +31,7 @@ except Exception:
     pytesseract = None
 
 ROOT = Path(__file__).resolve().parent
-app = FastAPI(title='APM Contratos Web', version='0.5')
+app = FastAPI(title='APM Contratos Web', version='0.6')
 app.add_middleware(SessionMiddleware, secret_key=os.getenv('APP_SECRET','dev-change-me'), https_only=os.getenv('COOKIE_SECURE','false').lower()=='true', same_site='lax')
 
 
@@ -65,7 +65,7 @@ def tesseract_available():
 @app.get('/api/health')
 def health():
     exe = configure_tesseract()
-    return {'ok': True, 'version': '0.5', 'mode':'web', 'ocr': bool(exe and pytesseract), 'tesseract_path': exe}
+    return {'ok': True, 'version': '0.6', 'mode':'web-production', 'ocr': bool(exe and pytesseract), 'tesseract_path': exe}
 
 @app.get('/api/ocr-status')
 def ocr_status():
@@ -472,5 +472,23 @@ async def create_user(request:Request):
         return {'ok':True,'id':nu.id}
     finally: db.close()
 
-# Serve frontend after API routes
-app.mount('/', StaticFiles(directory=str(ROOT), html=True), name='frontend')
+# Frontend production routes. Explicit files avoid relative-path/static mount issues on cloud hosts.
+app.mount('/assets', StaticFiles(directory=str(ROOT / 'assets')), name='assets')
+
+@app.get('/')
+def frontend_index():
+    return FileResponse(ROOT / 'index.html', media_type='text/html; charset=utf-8')
+
+@app.get('/styles.css')
+def frontend_css():
+    return FileResponse(ROOT / 'styles.css', media_type='text/css; charset=utf-8', headers={'Cache-Control':'no-cache'})
+
+@app.get('/app.js')
+def frontend_js():
+    return FileResponse(ROOT / 'app.js', media_type='application/javascript; charset=utf-8', headers={'Cache-Control':'no-cache'})
+
+@app.get('/favicon.ico', include_in_schema=False)
+def favicon():
+    logo=ROOT / 'assets' / 'logo.png'
+    return FileResponse(logo) if logo.exists() else JSONResponse({}, status_code=204)
+
