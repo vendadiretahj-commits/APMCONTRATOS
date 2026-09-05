@@ -1,0 +1,28 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: apm
+      POSTGRES_USER: apm
+      POSTGRES_PASSWORD: apm_dev
+    volumes:
+      - apm_db:/var/lib/postgresql/data
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      APP_SECRET: dev-secret-change-me
+      DATABASE_URL: postgresql+psycopg2://apm:apm_dev@db:5432/apm
+      ADMIN_EMAIL: admin@apm.local
+      ADMIN_PASSWORD: "123456"
+      ADMIN_NAME: Administrador APM
+      UPLOAD_DIR: /data/uploads
+      COOKIE_SECURE: "false"
+    volumes:
+      - apm_uploads:/data/uploads
+    depends_on:
+      - db
+volumes:
+  apm_db:
+  apm_uploads:

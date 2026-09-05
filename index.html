@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>APM Contratos — Web</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="login" class="login-screen">
+    <div class="login-card">
+      <img src="assets/logo.png" class="login-logo" alt="APM Contratos" />
+      <h1>Bem-vindo ao APM Contratos</h1>
+      <p>Gestão e geração inteligente de contratos imobiliários.</p>
+      <label>E-mail</label><input id="loginEmail" value="admin@apm.local" />
+      <label>Senha</label><input id="loginPass" type="password" value="123456" />
+      <button class="primary full" onclick="enterApp()">Entrar</button>
+      <small>Versão Web v0.5 — acesso centralizado e seguro pelo navegador.</small>
+    </div>
+    <div class="login-hero">
+      <div class="hero-copy"><span>APM CONTRATOS</span><h2>Contratos.<br><b>Documentos.</b><br><em>Imóveis.</em></h2><p>Um fluxo simples para transformar documentos em contratos padronizados.</p></div>
+    </div>
+  </div>
+
+  <div id="app" class="app hidden">
+    <aside class="sidebar">
+      <img src="assets/logo.png" class="side-logo" alt="APM Contratos" />
+      <nav>
+        <button class="nav active" data-page="dashboard">⌂ <span>Painel</span></button>
+        <button class="nav" data-page="negociacoes">▤ <span>Negociações</span></button>
+        <button class="nav" data-page="nova">＋ <span>Nova Negociação</span></button>
+        <button class="nav" data-page="clientes">◉ <span>Clientes</span></button>
+        <button class="nav" data-page="imoveis">⌂ <span>Imóveis</span></button>
+        <button class="nav" data-page="documentos">▧ <span>Documentos</span></button>
+        <button class="nav" data-page="leitura">⌁ <span>Leitura IA</span></button>
+        <button class="nav" data-page="modelos">▥ <span>Modelos e Cláusulas</span></button>
+        <button class="nav" data-page="config">⚙ <span>Configurações</span></button><button class="nav" data-page="usuarios">👥 <span>Usuários</span></button>
+      </nav>
+      <div class="version">APM Contratos<br><small>Web v0.5</small></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar"><input id="globalSearch" placeholder="Buscar cliente, imóvel, matrícula..." oninput="filterTable()" /><div class="backend-pill" id="backendPill">● Conectando...</div><div class="user">JS <span><span id="userDisplay">Usuário APM<br><small>Conectando...</small></span></span></div></header>
+
+      <section id="page-dashboard" class="page active-page">
+        <div class="title-row"><div><h1>Painel Geral</h1><p>Acompanhe negociações, documentos e contratos em um só lugar.</p></div><button class="primary" onclick="goPage('nova')">+ Nova Negociação</button></div>
+        <div class="stats">
+          <div class="stat"><div class="ico blue">▤</div><div><b id="stAndamento">12</b><span>Em andamento</span></div></div>
+          <div class="stat"><div class="ico orange">▧</div><div><b id="stDocs">8</b><span>Aguardando documentos</span></div></div>
+          <div class="stat"><div class="ico purple">✓</div><div><b id="stGerados">28</b><span>Contratos gerados</span></div></div>
+          <div class="stat"><div class="ico green">✓</div><div><b id="stConcluidos">46</b><span>Concluídas</span></div></div>
+        </div>
+
+        <div class="grid-two">
+          <div class="card chart-card"><div class="card-head"><h3>Contratos gerados por mês</h3><span>Últimos 6 meses</span></div><div id="lineChart" class="line-chart"></div></div>
+          <div class="card"><div class="card-head"><h3>Status das negociações</h3><span>Atual</span></div><div class="donut-wrap"><div class="donut" id="donut"></div><div class="legend"><span><i class="dot bluebg"></i> Em elaboração</span><span><i class="dot orangebg"></i> Aguardando docs</span><span><i class="dot greenbg"></i> Concluídas</span><span><i class="dot purplebg"></i> Geradas</span></div></div></div>
+        </div>
+
+        <div class="grid-main">
+          <div class="card"><div class="card-head"><h3>Negociações recentes</h3><button class="link" onclick="goPage('negociacoes')">Ver todas →</button></div><div class="table-wrap"><table id="recentTable"><thead><tr><th>Código</th><th>Imóvel</th><th>Cliente</th><th>Valor</th><th>Status</th><th>Atualizado</th></tr></thead><tbody></tbody></table></div></div>
+          <div class="card quick"><h3>Ações rápidas</h3><button onclick="goPage('nova')">＋ Nova Negociação</button><button onclick="goPage('documentos')">▧ Anexar Documentos</button><button onclick="goPage('modelos')">▥ Modelos e Cláusulas</button><button onclick="loadExample()">⚡ Carregar exemplo</button></div>
+        </div>
+      </section>
+
+      <section id="page-negociacoes" class="page"><div class="title-row"><div><h1>Negociações</h1><p>Todos os processos cadastrados.</p></div><button class="primary" onclick="goPage('nova')">+ Nova Negociação</button></div><div class="card"><div class="table-wrap"><table id="allTable"><thead><tr><th>Código</th><th>Imóvel</th><th>Comprador</th><th>Vendedor</th><th>Valor</th><th>Status</th></tr></thead><tbody></tbody></table></div></div></section>
+
+      <section id="page-nova" class="page">
+        <div class="title-row"><div><h1>Nova Negociação</h1><p>Cadastre documentos e condições para gerar o contrato.</p></div><button class="ghost" onclick="saveDraft()">Salvar rascunho</button></div>
+        <div class="steps" id="steps"></div>
+        <div id="wizard" class="card wizard"></div>
+      </section>
+
+      <section id="page-clientes" class="page"><div class="title-row"><div><h1>Clientes</h1><p>Cadastros reutilizáveis por CPF.</p></div></div><div class="card empty">Protótipo: os clientes aparecem automaticamente a partir das negociações salvas.</div></section>
+      <section id="page-imoveis" class="page"><div class="title-row"><div><h1>Imóveis</h1><p>Cadastros por matrícula e endereço.</p></div></div><div class="card empty">Protótipo: imóveis são criados a partir da etapa “Imóvel”.</div></section>
+      <section id="page-documentos" class="page"><div class="title-row"><div><h1>Documentos</h1><p>CNH, RG, CIN, certidões, comprovantes, matrícula, BCI e IPTU.</p></div><button class="primary" onclick="goPage('leitura')">Abrir laboratório de leitura</button></div><div class="card"><h3>Tipos suportados no fluxo</h3><div class="doc-type-grid"><div>CNH digital/antiga</div><div>RG/CIN</div><div>CPF</div><div>Certidões</div><div>Comprovantes</div><div>Matrículas</div><div>BCI/IPTU</div><div>Procurações</div></div></div></section>
+
+      <section id="page-leitura" class="page"><div class="title-row"><div><h1>Laboratório de Leitura IA</h1><p>Envie documentos reais. O APM lê PDFs digitais e usa OCR automaticamente em documentos escaneados. Os dados extraídos podem ser aplicados diretamente à negociação.</p></div><button class="ghost" onclick="loadDocumentTestSet()">Carregar conjunto de teste</button></div><div class="grid-two"><div class="card"><h3>Adicionar documento</h3><div class="upload large-upload"><b>Arraste ou escolha um arquivo</b><input id="readerFile" type="file" accept=".pdf,.jpg,.jpeg,.png" onchange="readerFileSelected(this)"><small id="readerFileName">Nenhum arquivo selecionado</small></div><div class="form-grid" style="margin-top:14px"><div class="field"><label>Tipo informado (opcional)</label><select id="readerType"><option value="auto">Detectar automaticamente</option><option>CNH</option><option>RG</option><option>CIN</option><option>CPF</option><option>Certidão de casamento</option><option>Certidão de nascimento</option><option>Comprovante de endereço</option><option>Matrícula</option><option>BCI/IPTU</option></select></div><div class="field"><label>Vincular a</label><select id="readerRole"><option>Vendedor</option><option>Comprador</option><option>Imóvel</option><option>Outro</option></select></div></div><button class="primary" style="margin-top:14px" onclick="processReaderFile()">Processar documento</button><p class="muted-note">Com o servidor local ativo, arquivos novos são processados no computador. PDFs com texto são lidos diretamente; imagens e PDFs escaneados usam OCR quando o Tesseract estiver instalado. Os arquivos não são enviados para a internet.</p></div><div class="card"><h3>Prévia do documento</h3><div id="readerPreview" class="reader-preview"><span>Selecione um arquivo para visualizar.</span></div></div></div><div class="card" style="margin-top:16px"><div class="card-head"><h3>Resultado estruturado</h3><span id="readerStatus">Aguardando documento</span></div><div id="readerResult" class="reader-result empty-lite">Nenhum resultado ainda.</div></div><div class="grid-two" style="margin-top:16px"><div class="card"><h3>Campos pendentes</h3><div id="readerPending" class="pending-list"><span class="muted-note">—</span></div></div><div class="card"><h3>Regras aplicadas</h3><div class="rule-list"><span>✓ Não inventar campo ausente</span><span>✓ Guardar fonte do dado</span><span>✓ Separar matrícula e BCI</span><span>✓ Não comparar metragens</span><span>✓ Gravames exigem confirmação</span></div></div></div></section>
+      <section id="page-modelos" class="page"><div class="title-row"><div><h1>Modelos e Cláusulas</h1><p>Biblioteca controlada do Contrato-Mestre.</p></div></div><div class="card"><h3>Cláusulas disponíveis</h3><div class="clause-list"><label><input type="checkbox" checked disabled> Partes</label><label><input type="checkbox" checked disabled> Objeto</label><label><input type="checkbox" checked disabled> Preço e pagamento</label><label><input type="checkbox"> Bens que permanecem</label><label><input type="checkbox"> Quitação de financiamento</label><label><input type="checkbox"> Comprador já na posse</label><label><input type="checkbox"> Procuração</label><label><input type="checkbox"> Corretagem</label></div></div></section>
+      <section id="page-config" class="page"><div class="title-row"><div><h1>Configurações</h1><p>Padrões iniciais do APM Contratos e diagnóstico local.</p></div></div><div class="grid-two"><div class="card settings"><label>Multa padrão <input value="10% do valor total do imóvel"></label><label>Testemunhas <input value="2"></label><label>Metragem <input value="Não incluir por padrão"></label><label>Data <input value="Atual, editável"></label><label>Documento preferencial <input value="CNH > RG > CIN"></label></div><div class="card"><h3>OCR para documentos escaneados</h3><p>O Tesseract é usado para RG, CNH antiga, comprovantes e matrículas que são apenas imagem.</p><div id="ocrStatusBox"><span class="muted-note">Verificando...</span></div><button class="ghost" style="margin-top:12px" onclick="updateOcrCard()">Verificar novamente</button></div></div></section>
+
+      <section id="page-usuarios" class="page"><div class="title-row"><div><h1>Usuários</h1><p>Crie acessos para corretores e administradores.</p></div></div><div class="grid-two"><div class="card"><h3>Novo usuário</h3><div class="field"><label>Nome</label><input id="newUserName"></div><div class="field"><label>E-mail</label><input id="newUserEmail" type="email"></div><div class="field"><label>Senha inicial</label><input id="newUserPass" type="password"></div><div class="field"><label>Perfil</label><select id="newUserRole"><option value="corretor">Corretor</option><option value="admin">Administrador</option></select></div><button class="primary" onclick="createCloudUser()">Criar usuário</button></div><div class="card"><h3>Usuários cadastrados</h3><div id="usersList" class="pending-list"><span class="muted-note">Carregando...</span></div></div></div></section>
+    </main>
+  </div>
+
+<script src="app.js"></script>
+</body>
+</html>
